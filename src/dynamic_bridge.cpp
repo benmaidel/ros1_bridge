@@ -19,8 +19,10 @@
 #include <string>
 #include <utility>
 #include <vector>
+#include <boost/algorithm/string/predicate.hpp>
 
 #include "ros1_bridge/helper.hpp"
+#include "ros1_bridge/action_factory.hpp"
 
 std::mutex g_bridge_mutex;
 
