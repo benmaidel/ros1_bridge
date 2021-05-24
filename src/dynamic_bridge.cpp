@@ -136,7 +136,8 @@ void update_bridge(
   std::map<std::string, Bridge2to1HandlesAndMessageTypes> & bridges_2to1,
   std::map<std::string, ros1_bridge::ServiceBridge1to2> & service_bridges_1_to_2,
   std::map<std::string, ros1_bridge::ServiceBridge2to1> & service_bridges_2_to_1,
-  bool bridge_all_1to2_topics, bool bridge_all_2to1_topics)
+  bool bridge_all_1to2_topics, bool bridge_all_2to1_topics,
+  std::vector<rclcpp::CallbackGroup::SharedPtr> & invalid_callback_group)
 {
   std::lock_guard<std::mutex> lock(g_bridge_mutex);
 
@@ -358,6 +359,8 @@ void update_bridge(
     if (ros1_services.find(it->first) == ros1_services.end()) {
       printf("Removed 2 to 1 bridge for service %s\n", it->first.data());
       try {
+        // store the callback group to ensure that it is deleted after the node
+        invalid_callback_group.push_back(it->second.group);
         it = service_bridges_2_to_1.erase(it);
       } catch (std::runtime_error & e) {
         fprintf(stderr, "There was an error while removing 2 to 1 bridge: %s\n", e.what());
@@ -373,6 +376,8 @@ void update_bridge(
       printf("Removed 1 to 2 bridge for service %s\n", it->first.data());
       try {
         it->second.server.shutdown();
+        // store the callback group to ensure that it is deleted after the node
+        invalid_callback_group.push_back(it->second.group);
         it = service_bridges_1_to_2.erase(it);
       } catch (std::runtime_error & e) {
         fprintf(stderr, "There was an error while removing 1 to 2 bridge: %s\n", e.what());
@@ -489,6 +494,7 @@ int main(int argc, char * argv[])
   std::map<std::string, Bridge2to1HandlesAndMessageTypes> bridges_2to1;
   std::map<std::string, ros1_bridge::ServiceBridge1to2> service_bridges_1_to_2;
   std::map<std::string, ros1_bridge::ServiceBridge2to1> service_bridges_2_to_1;
+  std::vector<rclcpp::CallbackGroup::SharedPtr> invalid_callback_group;
 
   // setup polling of ROS 1 master
   auto ros1_poll = [
@@ -499,7 +505,8 @@ int main(int argc, char * argv[])
     &ros1_services, &ros2_services,
     &service_bridges_1_to_2, &service_bridges_2_to_1,
     &output_topic_introspection,
-    &bridge_all_1to2_topics, &bridge_all_2to1_topics
+    &bridge_all_1to2_topics, &bridge_all_2to1_topics,
+    &invalid_callback_group
     ](const ros::TimerEvent &) -> void
     {
       // collect all topics names which have at least one publisher or subscriber beside this bridge
@@ -617,7 +624,8 @@ int main(int argc, char * argv[])
         ros1_services, ros2_services,
         bridges_1to2, bridges_2to1,
         service_bridges_1_to_2, service_bridges_2_to_1,
-        bridge_all_1to2_topics, bridge_all_2to1_topics);
+        bridge_all_1to2_topics, bridge_all_2to1_topics,
+        invalid_callback_group);
     };
 
   auto ros1_poll_timer = ros1_node.createTimer(ros::Duration(1.0), ros1_poll);
@@ -636,7 +644,8 @@ int main(int argc, char * argv[])
     &service_bridges_1_to_2, &service_bridges_2_to_1,
     &output_topic_introspection,
     &bridge_all_1to2_topics, &bridge_all_2to1_topics,
-    &already_ignored_topics, &already_ignored_services
+    &already_ignored_topics, &already_ignored_services,
+    &invalid_callback_group
     ]() -> void
     {
       auto ros2_topics = ros2_node->get_topic_names_and_types();
@@ -781,7 +790,8 @@ int main(int argc, char * argv[])
         ros1_services, ros2_services,
         bridges_1to2, bridges_2to1,
         service_bridges_1_to_2, service_bridges_2_to_1,
-        bridge_all_1to2_topics, bridge_all_2to1_topics);
+        bridge_all_1to2_topics, bridge_all_2to1_topics,
+        invalid_callback_group);
     };
 
   auto ros2_poll_timer = ros2_node->create_wall_timer(
@@ -789,13 +799,14 @@ int main(int argc, char * argv[])
 
 
   // ROS 1 asynchronous spinner
-  ros::AsyncSpinner async_spinner(1);
+  ros::AsyncSpinner async_spinner(0);
   async_spinner.start();
 
   // ROS 2 spinning loop
-  rclcpp::executors::SingleThreadedExecutor executor;
+  rclcpp::executors::MultiThreadedExecutor executor;
   while (ros1_node.ok() && rclcpp::ok()) {
     executor.spin_node_once(ros2_node);
+    invalid_callback_group.clear();
   }
 
   return 0;
