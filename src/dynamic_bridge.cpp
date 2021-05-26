@@ -431,6 +431,16 @@ int main(int argc, char * argv[])
                                           output_topic_introspection);
       ros1_bridge::get_ros1_services(payload, active_ros1_services);
 
+      // check actions
+      std::map<std::string, std::string> active_ros1_action_servers, active_ros1_action_clients;
+      get_active_ros1_actions(
+        current_ros1_publishers, current_ros1_subscribers,
+        active_ros1_action_servers, active_ros1_action_clients);
+
+      if (output_topic_introspection) {
+        printf("\n");
+      }
+
       {
         std::lock_guard<std::mutex> lock(g_bridge_mutex);
         ros1_services = active_ros1_services;
@@ -479,11 +489,21 @@ int main(int argc, char * argv[])
                                             already_ignored_topics, output_topic_introspection);
       ros1_bridge::get_ros2_services(ros2_node, active_ros2_services, already_ignored_services);
 
+      std::map<std::string, std::string> active_ros2_action_servers, active_ros2_action_clients;
+      get_active_ros2_actions(
+        current_ros2_publishers, current_ros2_subscribers,
+        active_ros2_action_servers, active_ros2_action_clients);
+
+
       {
         std::lock_guard<std::mutex> lock(g_bridge_mutex);
         ros2_services = active_ros2_services;
         ros2_publishers = current_ros2_publishers;
         ros2_subscribers = current_ros2_subscribers;
+      }
+
+      if (output_topic_introspection) {
+        printf("\n");
       }
 
       update_bridge(
