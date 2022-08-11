@@ -322,7 +322,7 @@ public:
     if (client.call(srv)) {
       translate_1_to_2(srv.response, *response);
     } else {
-      throw std::runtime_error("Failed to get response from ROS 1 service " + client.getService());
+      RCLCPP_ERROR(logger, "Failed to get response from ROS 1 service %s", client.getService());
     }
   }
 
