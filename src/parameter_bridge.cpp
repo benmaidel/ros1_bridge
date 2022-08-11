@@ -22,6 +22,7 @@
 # pragma clang diagnostic push
 # pragma clang diagnostic ignored "-Wunused-parameter"
 #endif
+#include "ros/callback_queue.h"
 #include "ros/ros.h"
 #ifdef __clang__
 # pragma clang diagnostic pop
@@ -229,11 +230,52 @@ rclcpp::QoS qos_from_params(XmlRpc::XmlRpcValue qos_params)
   return ros2_publisher_qos;
 }
 
+bool find_command_option(const std::vector<std::string> & args, const std::string & option)
+{
+  return std::find(args.begin(), args.end(), option) != args.end();
+}
+
+bool get_flag_option(const std::vector<std::string> & args, const std::string & option)
+{
+  auto it = std::find(args.begin(), args.end(), option);
+  return it != args.end();
+}
+
+bool parse_command_options(
+  int argc, char ** argv, bool &multi_threads)
+{
+  std::vector<std::string> args(argv, argv + argc);
+
+  if (find_command_option(args, "-h") || find_command_option(args, "--help")) {
+    std::stringstream ss;
+    ss << "Usage:" << std::endl;
+    ss << " -h, --help: This message." << std::endl;
+    ss << " --multi-threads: Bridge with multiple threads for spinner of ROS 1 and ROS 2.";
+    ss << std::endl;
+    std::cout << ss.str();
+    return false;
+  }
+
+  multi_threads = get_flag_option(args, "--multi-threads");
+
+  return true;
+}
+
 int main(int argc, char * argv[])
 {
+  bool multi_threads;
+
+  if (!parse_command_options(argc, argv, multi_threads))
+    return 0;
+
   // ROS 1 node
   ros::init(argc, argv, "ros_bridge");
   ros::NodeHandle ros1_node;
+  std::unique_ptr<ros::CallbackQueue> ros1_callback_queue = nullptr;
+  if (multi_threads) {
+    ros1_callback_queue = std::make_unique<ros::CallbackQueue>();
+    ros1_node.setCallbackQueue(ros1_callback_queue.get());
+  }
 
   // ROS 2 node
   rclcpp::init(argc, argv);
@@ -355,7 +397,7 @@ int main(int argc, char * argv[])
         try {
           service_bridges_1_to_2.push_back(
             factory->service_bridge_1_to_2(
-              ros1_node, ros2_node, service_name, service_execution_timeout));
+              ros1_node, ros2_node, service_name, service_execution_timeout, multi_threads));
           printf("Created 1 to 2 bridge for service %s\n", service_name.c_str());
         } catch (std::runtime_error & e) {
           fprintf(
@@ -417,7 +459,7 @@ int main(int argc, char * argv[])
       if (factory) {
         try {
           service_bridges_2_to_1.push_back(
-            factory->service_bridge_2_to_1(ros1_node, ros2_node, service_name));
+            factory->service_bridge_2_to_1(ros1_node, ros2_node, service_name, multi_threads));
           printf("Created 2 to 1 bridge for service %s\n", service_name.c_str());
         } catch (std::runtime_error & e) {
           fprintf(
@@ -440,15 +482,36 @@ int main(int argc, char * argv[])
       services_2_to_1_parameter_name);
   }
 
+  auto check_ros1_flag = [&ros1_node] {
+    if (!ros1_node.ok()) {
+      rclcpp::shutdown();
+    }
+  };
+
+  auto ros2_poll_timer = ros2_node->create_wall_timer(
+    std::chrono::seconds(1), [&check_ros1_flag] {
+      check_ros1_flag();
+    }
+  );
+
   // ROS 1 asynchronous spinner
-  ros::AsyncSpinner async_spinner(1);
-  async_spinner.start();
+  std::unique_ptr<ros::AsyncSpinner> async_spinner = nullptr;
+  if (!multi_threads) {
+    async_spinner = std::make_unique<ros::AsyncSpinner>(1);
+  } else {
+    async_spinner = std::make_unique<ros::AsyncSpinner>(0, ros1_callback_queue.get());
+  }
+  async_spinner->start();
 
   // ROS 2 spinning loop
-  rclcpp::executors::SingleThreadedExecutor executor;
-  while (ros1_node.ok() && rclcpp::ok()) {
-    executor.spin_node_once(ros2_node, std::chrono::milliseconds(1000));
+  std::unique_ptr<rclcpp::Executor> executor = nullptr;
+  if (!multi_threads) {
+    executor = std::make_unique<rclcpp::executors::SingleThreadedExecutor>();
+  } else {
+    executor = std::make_unique<rclcpp::executors::MultiThreadedExecutor>();
   }
+  executor->add_node(ros2_node);
+  executor->spin();
 
   return 0;
 }
