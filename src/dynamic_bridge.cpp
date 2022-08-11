@@ -40,7 +40,7 @@
 #include "rcpputils/scope_exit.hpp"
 
 #include "ros1_bridge/bridge.hpp"
-
+#include "ros1_bridge/helper.hpp"
 
 std::mutex g_bridge_mutex;
 
@@ -58,17 +58,6 @@ struct Bridge2to1HandlesAndMessageTypes
   std::string ros2_type_name;
 };
 
-bool find_command_option(const std::vector<std::string> & args, const std::string & option)
-{
-  return std::find(args.begin(), args.end(), option) != args.end();
-}
-
-bool get_flag_option(const std::vector<std::string> & args, const std::string & option)
-{
-  auto it = std::find(args.begin(), args.end(), option);
-  return it != args.end();
-}
-
 bool parse_command_options(
   int argc, char ** argv, bool & output_topic_introspection,
   bool & bridge_all_1to2_topics, bool & bridge_all_2to1_topics,
@@ -76,7 +65,7 @@ bool parse_command_options(
 {
   std::vector<std::string> args(argv, argv + argc);
 
-  if (find_command_option(args, "-h") || find_command_option(args, "--help")) {
+  if (ros1_bridge::find_command_option(args, "-h") || ros1_bridge::find_command_option(args, "--help")) {
     std::stringstream ss;
     ss << "Usage:" << std::endl;
     ss << " -h, --help: This message." << std::endl;
@@ -96,7 +85,7 @@ bool parse_command_options(
     return false;
   }
 
-  if (get_flag_option(args, "--print-pairs")) {
+  if (ros1_bridge::get_flag_option(args, "--print-pairs")) {
     auto mappings_2to1 = ros1_bridge::get_all_message_mappings_2to1();
     if (mappings_2to1.size() > 0) {
       printf("Supported ROS 2 <=> ROS 1 message type conversion pairs:\n");
@@ -118,12 +107,12 @@ bool parse_command_options(
     return false;
   }
 
-  output_topic_introspection = get_flag_option(args, "--show-introspection");
+  output_topic_introspection = ros1_bridge::get_flag_option(args, "--show-introspection");
 
-  bool bridge_all_topics = get_flag_option(args, "--bridge-all-topics");
-  bridge_all_1to2_topics = bridge_all_topics || get_flag_option(args, "--bridge-all-1to2-topics");
-  bridge_all_2to1_topics = bridge_all_topics || get_flag_option(args, "--bridge-all-2to1-topics");
-  multi_threads = get_flag_option(args, "--multi-threads");
+  bool bridge_all_topics = ros1_bridge::get_flag_option(args, "--bridge-all-topics");
+  bridge_all_1to2_topics = bridge_all_topics || ros1_bridge::get_flag_option(args, "--bridge-all-1to2-topics");
+  bridge_all_2to1_topics = bridge_all_topics || ros1_bridge::get_flag_option(args, "--bridge-all-2to1-topics");
+  multi_threads = ros1_bridge::get_flag_option(args, "--multi-threads");
 
   return true;
 }
