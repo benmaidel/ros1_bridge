@@ -12,7 +12,7 @@
 
 namespace ros1_bridge {
 
-inline rclcpp::QoS qos_from_params(XmlRpc::XmlRpcValue qos_params)
+rclcpp::QoS qos_from_params(XmlRpc::XmlRpcValue qos_params)
 {
   auto ros2_publisher_qos = rclcpp::QoS(rclcpp::KeepLast(10));
 
@@ -209,12 +209,12 @@ inline rclcpp::QoS qos_from_params(XmlRpc::XmlRpcValue qos_params)
   return ros2_publisher_qos;
 }
 
-inline bool find_command_option(const std::vector<std::string> & args, const std::string & option)
+bool find_command_option(const std::vector<std::string> & args, const std::string & option)
 {
   return std::find(args.begin(), args.end(), option) != args.end();
 }
 
-inline bool get_flag_option(const std::vector<std::string> & args, const std::string & option)
+bool get_flag_option(const std::vector<std::string> & args, const std::string & option)
 {
   auto it = std::find(args.begin(), args.end(), option);
   return it != args.end();
