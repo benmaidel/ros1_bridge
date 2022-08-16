@@ -14,239 +14,20 @@
 
 #include <xmlrpcpp/XmlRpcException.h>
 
+#include <memory>
 #include <list>
 #include <string>
 
-// include ROS 1
-#ifdef __clang__
-# pragma clang diagnostic push
-# pragma clang diagnostic ignored "-Wunused-parameter"
-#endif
-#include "ros/callback_queue.h"
-#include "ros/ros.h"
-#ifdef __clang__
-# pragma clang diagnostic pop
-#endif
+#include "ros1_bridge/helper.hpp"
 
-// include ROS 2
-#include "rclcpp/rclcpp.hpp"
-
-#include "ros1_bridge/bridge.hpp"
-
-rclcpp::QoS qos_from_params(XmlRpc::XmlRpcValue qos_params)
-{
-  auto ros2_publisher_qos = rclcpp::QoS(rclcpp::KeepLast(10));
-
-  printf("Qos(");
-
-  if (qos_params.getType() == XmlRpc::XmlRpcValue::TypeStruct) {
-    if (qos_params.hasMember("history")) {
-      auto history = static_cast<std::string>(qos_params["history"]);
-      printf("history: ");
-      if (history == "keep_all") {
-        ros2_publisher_qos.keep_all();
-        printf("keep_all, ");
-      } else if (history == "keep_last") {
-        if (qos_params.hasMember("depth")) {
-          auto depth = static_cast<int>(qos_params["depth"]);
-          ros2_publisher_qos.keep_last(depth);
-          printf("keep_last(%i), ", depth);
-        } else {
-          fprintf(
-            stderr,
-            "history: keep_last requires that also a depth is set\n");
-        }
-      } else {
-        fprintf(
-          stderr,
-          "invalid value for 'history': '%s', allowed values are 'keep_all',"
-          "'keep_last' (also requires 'depth' to be set)\n",
-          history.c_str());
-      }
-    }
-
-    if (qos_params.hasMember("reliability")) {
-      auto reliability = static_cast<std::string>(qos_params["reliability"]);
-      printf("reliability: ");
-      if (reliability == "best_effort") {
-        ros2_publisher_qos.best_effort();
-        printf("best_effort, ");
-      } else if (reliability == "reliable") {
-        ros2_publisher_qos.reliable();
-        printf("reliable, ");
-      } else {
-        fprintf(
-          stderr,
-          "invalid value for 'reliability': '%s', allowed values are 'best_effort', 'reliable'\n",
-          reliability.c_str());
-      }
-    }
-
-    if (qos_params.hasMember("durability")) {
-      auto durability = static_cast<std::string>(qos_params["durability"]);
-      printf("durability: ");
-      if (durability == "transient_local") {
-        ros2_publisher_qos.transient_local();
-        printf("transient_local, ");
-      } else if (durability == "volatile") {
-        ros2_publisher_qos.durability_volatile();
-        printf("volatile, ");
-      } else {
-        fprintf(
-          stderr,
-          "invalid value for 'durability': '%s', allowed values are 'best_effort', 'volatile'\n",
-          durability.c_str());
-      }
-    }
-
-    if (qos_params.hasMember("deadline")) {
-      try {
-        rclcpp::Duration dur = rclcpp::Duration(
-          static_cast<int>(qos_params["deadline"]["secs"]),
-          static_cast<int>(qos_params["deadline"]["nsecs"]));
-        ros2_publisher_qos.deadline(dur);
-        printf("deadline: Duration(nsecs: %ld), ", dur.nanoseconds());
-      } catch (std::runtime_error & e) {
-        fprintf(
-          stderr,
-          "failed to parse deadline: '%s'\n",
-          e.what());
-      } catch (XmlRpc::XmlRpcException & e) {
-        fprintf(
-          stderr,
-          "failed to parse deadline: '%s'\n",
-          e.getMessage().c_str());
-      }
-    }
-
-    if (qos_params.hasMember("lifespan")) {
-      try {
-        rclcpp::Duration dur = rclcpp::Duration(
-          static_cast<int>(qos_params["lifespan"]["secs"]),
-          static_cast<int>(qos_params["lifespan"]["nsecs"]));
-        ros2_publisher_qos.lifespan(dur);
-        printf("lifespan: Duration(nsecs: %ld), ", dur.nanoseconds());
-      } catch (std::runtime_error & e) {
-        fprintf(
-          stderr,
-          "failed to parse lifespan: '%s'\n",
-          e.what());
-      } catch (XmlRpc::XmlRpcException & e) {
-        fprintf(
-          stderr,
-          "failed to parse lifespan: '%s'\n",
-          e.getMessage().c_str());
-      }
-    }
-
-    if (qos_params.hasMember("liveliness")) {
-      if (qos_params["liveliness"].getType() == XmlRpc::XmlRpcValue::TypeInt) {
-        try {
-          auto liveliness = static_cast<int>(qos_params["liveliness"]);
-          ros2_publisher_qos.liveliness(static_cast<rmw_qos_liveliness_policy_t>(liveliness));
-          printf("liveliness: %i, ", static_cast<int>(liveliness));
-        } catch (std::runtime_error & e) {
-          fprintf(
-            stderr,
-            "failed to parse liveliness: '%s'\n",
-            e.what());
-        } catch (XmlRpc::XmlRpcException & e) {
-          fprintf(
-            stderr,
-            "failed to parse liveliness: '%s'\n",
-            e.getMessage().c_str());
-        }
-      } else if (qos_params["liveliness"].getType() == XmlRpc::XmlRpcValue::TypeString) {
-        try {
-          rmw_qos_liveliness_policy_t liveliness =
-            rmw_qos_liveliness_policy_t::RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT;
-          auto liveliness_str = static_cast<std::string>(qos_params["liveliness"]);
-          if (liveliness_str == "LIVELINESS_SYSTEM_DEFAULT" ||
-            liveliness_str == "liveliness_system_default")
-          {
-            liveliness = rmw_qos_liveliness_policy_t::RMW_QOS_POLICY_LIVELINESS_SYSTEM_DEFAULT;
-          } else if (liveliness_str == "LIVELINESS_AUTOMATIC" ||  // NOLINT
-            liveliness_str == "liveliness_automatic")
-          {
-            liveliness = rmw_qos_liveliness_policy_t::RMW_QOS_POLICY_LIVELINESS_AUTOMATIC;
-          } else if (liveliness_str == "LIVELINESS_MANUAL_BY_TOPIC" ||  // NOLINT
-            liveliness_str == "liveliness_manual_by_topic")
-          {
-            liveliness = rmw_qos_liveliness_policy_t::RMW_QOS_POLICY_LIVELINESS_MANUAL_BY_TOPIC;
-          } else {
-            fprintf(
-              stderr,
-              "invalid value for 'liveliness': '%s', allowed values are "
-              "LIVELINESS_{SYSTEM_DEFAULT, AUTOMATIC, MANUAL_BY_TOPIC}, upper or lower case\n",
-              liveliness_str.c_str());
-          }
-
-          ros2_publisher_qos.liveliness(liveliness);
-          printf("liveliness: %s, ", liveliness_str.c_str());
-        } catch (std::runtime_error & e) {
-          fprintf(
-            stderr,
-            "failed to parse liveliness: '%s'\n",
-            e.what());
-        } catch (XmlRpc::XmlRpcException & e) {
-          fprintf(
-            stderr,
-            "failed to parse liveliness: '%s'\n",
-            e.getMessage().c_str());
-        }
-      } else {
-        fprintf(
-          stderr,
-          "failed to parse liveliness, parameter was not a string or int \n");
-      }
-    }
-
-    if (qos_params.hasMember("liveliness_lease_duration")) {
-      try {
-        rclcpp::Duration dur = rclcpp::Duration(
-          static_cast<int>(qos_params["liveliness_lease_duration"]["secs"]),
-          static_cast<int>(qos_params["liveliness_lease_duration"]["nsecs"]));
-        ros2_publisher_qos.liveliness_lease_duration(dur);
-        printf("liveliness_lease_duration: Duration(nsecs: %ld), ", dur.nanoseconds());
-      } catch (std::runtime_error & e) {
-        fprintf(
-          stderr,
-          "failed to parse liveliness_lease_duration: '%s'\n",
-          e.what());
-      } catch (XmlRpc::XmlRpcException & e) {
-        fprintf(
-          stderr,
-          "failed to parse liveliness_lease_duration: '%s'\n",
-          e.getMessage().c_str());
-      }
-    }
-  } else {
-    fprintf(
-      stderr,
-      "QoS parameters could not be read\n");
-  }
-
-  printf(")");
-  return ros2_publisher_qos;
-}
-
-bool find_command_option(const std::vector<std::string> & args, const std::string & option)
-{
-  return std::find(args.begin(), args.end(), option) != args.end();
-}
-
-bool get_flag_option(const std::vector<std::string> & args, const std::string & option)
-{
-  auto it = std::find(args.begin(), args.end(), option);
-  return it != args.end();
-}
+std::mutex g_bridge_mutex;
 
 bool parse_command_options(
   int argc, char ** argv, bool &multi_threads)
 {
   std::vector<std::string> args(argv, argv + argc);
 
-  if (find_command_option(args, "-h") || find_command_option(args, "--help")) {
+  if (ros1_bridge::find_command_option(args, "-h") || ros1_bridge::find_command_option(args, "--help")) {
     std::stringstream ss;
     ss << "Usage:" << std::endl;
     ss << " -h, --help: This message." << std::endl;
@@ -256,9 +37,147 @@ bool parse_command_options(
     return false;
   }
 
-  multi_threads = get_flag_option(args, "--multi-threads");
+  multi_threads = ros1_bridge::get_flag_option(args, "--multi-threads");
 
   return true;
+}
+
+void update_services(
+  ros::NodeHandle & ros1_node,
+  rclcpp::Node::SharedPtr ros2_node,
+  const std::map<std::string, std::map<std::string, std::string>> & ros1_services,
+  const std::map<std::string, std::map<std::string, std::string>> & ros2_services,
+  std::map<std::string, ros1_bridge::ServiceBridge1to2> & service_bridges_1_to_2,
+  std::map<std::string, ros1_bridge::ServiceBridge2to1> & service_bridges_2_to_1,
+  std::string services_1_to_2_parameter_name, std::string services_2_to_1_parameter_name,
+  int service_execution_timeout, bool multi_threads = false)
+{
+  std::lock_guard<std::mutex> lock(g_bridge_mutex);
+
+  // load parameters for 2 to 1 services
+  XmlRpc::XmlRpcValue services_2_to_1;
+  if (
+    ros1_node.getParam(services_2_to_1_parameter_name, services_2_to_1) &&
+    services_2_to_1.getType() == XmlRpc::XmlRpcValue::TypeArray)
+  {
+    for (size_t i = 0; i < static_cast<size_t>(services_2_to_1.size()); ++i) {
+      std::string service_name = static_cast<std::string>(services_2_to_1[i]["service"]);
+      std::string service_type = static_cast<std::string>(services_2_to_1[i]["type"]);
+
+      // create bridges for ros1 services
+      for (auto & service : ros1_services) {
+        auto & name = service.first;
+        auto & details = service.second;
+        if (
+          service_bridges_2_to_1.find(name) == service_bridges_2_to_1.end() &&
+          service_bridges_1_to_2.find(name) == service_bridges_1_to_2.end())
+        {
+          if(name != service_name)
+          {
+            continue;
+          }
+          std::stringstream ss;
+          ss << details.at("package") << "/" << details.at("name");
+          if(service_type == ss.str()) {
+            auto factory = ros1_bridge::get_service_factory(
+              "ros1", details.at("package"), details.at("name"));
+            if (factory) {
+              try {
+                service_bridges_2_to_1[name] = factory->service_bridge_2_to_1(
+                  ros1_node, ros2_node, name, multi_threads);
+                printf("Created 2 to 1 bridge for service %s\n", name.data());
+              } catch (std::runtime_error & e) {
+                fprintf(stderr, "Failed to created a bridge: %s\n", e.what());
+              }
+            }
+          }
+          else {
+            fprintf(stderr, "Failed to created a bridge for service %s. types differ\n", name.c_str());
+          }
+        }
+      }
+    }
+  } else {
+    fprintf(
+      stderr,
+      "The parameter '%s' either doesn't exist or isn't an array\n",
+      services_2_to_1_parameter_name.c_str());
+  }
+
+  XmlRpc::XmlRpcValue services_1_to_2;
+  if (
+    ros1_node.getParam(services_1_to_2_parameter_name, services_1_to_2) &&
+    services_1_to_2.getType() == XmlRpc::XmlRpcValue::TypeArray)
+  {
+    for (size_t i = 0; i < static_cast<size_t>(services_1_to_2.size()); ++i) {
+      //first check if this service is already in the map saved
+
+      std::string service_name = static_cast<std::string>(services_1_to_2[i]["service"]);
+      std::string service_type = static_cast<std::string>(services_1_to_2[i]["type"]);
+
+      // create bridges for ros2 services
+      for (auto & service : ros2_services) {
+        auto & name = service.first;
+        auto & details = service.second;
+        if (
+          service_bridges_1_to_2.find(name) == service_bridges_1_to_2.end() &&
+          service_bridges_2_to_1.find(name) == service_bridges_2_to_1.end())
+        {
+          if(name != service_name)
+          {
+            continue;
+          }
+          std::stringstream ss;
+          ss << details.at("package") << "/" << details.at("name");
+          if(service_type == ss.str()) {
+            auto factory = ros1_bridge::get_service_factory(
+              "ros2", details.at("package"), details.at("name"));
+            if (factory) {
+              try {
+                service_bridges_1_to_2[name] = factory->service_bridge_1_to_2(
+                  ros1_node, ros2_node, name, service_execution_timeout, multi_threads);
+                printf("Created 1 to 2 bridge for service %s\n", name.data());
+              } catch (std::runtime_error & e) {
+                fprintf(stderr, "Failed to created a bridge: %s\n", e.what());
+              }
+            }
+          }
+          else {
+            fprintf(stderr, "Failed to created a bridge for service %s. types differ\n", name.c_str());
+          }
+        }
+      }
+    }
+  }
+
+  // remove obsolete ros1 services
+  for (auto it = service_bridges_2_to_1.begin(); it != service_bridges_2_to_1.end(); ) {
+    if (ros1_services.find(it->first) == ros1_services.end()) {
+      printf("Removed 2 to 1 bridge for service %s\n", it->first.data());
+      try {
+        it = service_bridges_2_to_1.erase(it);
+      } catch (std::runtime_error & e) {
+        fprintf(stderr, "There was an error while removing 2 to 1 bridge: %s\n", e.what());
+      }
+    } else {
+      ++it;
+    }
+  }
+
+  // remove obsolete ros2 services
+  for (auto it = service_bridges_1_to_2.begin(); it != service_bridges_1_to_2.end(); ) {
+    if (ros2_services.find(it->first) == ros2_services.end()) {
+      printf("Removed 1 to 2 bridge for service %s\n", it->first.data());
+      try {
+        it->second.server.shutdown();
+        it = service_bridges_1_to_2.erase(it);
+      } catch (std::runtime_error & e) {
+        fprintf(stderr, "There was an error while removing 1 to 2 bridge: %s\n", e.what());
+      }
+    } else {
+      ++it;
+    }
+  }
 }
 
 int main(int argc, char * argv[])
@@ -267,6 +186,10 @@ int main(int argc, char * argv[])
 
   if (!parse_command_options(argc, argv, multi_threads))
     return 0;
+
+  // ROS 2 node
+  rclcpp::init(argc, argv);
+  auto ros2_node = rclcpp::Node::make_shared("ros_bridge");
 
   // ROS 1 node
   ros::init(argc, argv, "ros_bridge");
@@ -277,13 +200,11 @@ int main(int argc, char * argv[])
     ros1_node.setCallbackQueue(ros1_callback_queue.get());
   }
 
-  // ROS 2 node
-  rclcpp::init(argc, argv);
-  auto ros2_node = rclcpp::Node::make_shared("ros_bridge");
-
   std::list<ros1_bridge::BridgeHandles> all_handles;
-  std::list<ros1_bridge::ServiceBridge1to2> service_bridges_1_to_2;
-  std::list<ros1_bridge::ServiceBridge2to1> service_bridges_2_to_1;
+  std::map<std::string, std::map<std::string, std::string>> ros1_services;
+  std::map<std::string, std::map<std::string, std::string>> ros2_services;
+  std::map<std::string, ros1_bridge::ServiceBridge1to2> service_bridges_1_to_2;
+  std::map<std::string, ros1_bridge::ServiceBridge2to1> service_bridges_2_to_1;
 
   // bridge all topics listed in a ROS 1 parameter
   // the topics parameter needs to be an array
@@ -300,15 +221,19 @@ int main(int argc, char * argv[])
   const char * services_2_to_1_parameter_name = "services_2_to_1";
   const char * service_execution_timeout_parameter_name =
     "ros1_bridge/parameter_bridge/service_execution_timeout";
-  if (argc > 1) {
-    topics_parameter_name = argv[1];
-  }
-  if (argc > 2) {
-    services_1_to_2_parameter_name = argv[2];
-  }
-  if (argc > 3) {
-    services_2_to_1_parameter_name = argv[3];
-  }
+  // if (argc > 1) {
+  //   topics_parameter_name = argv[1];
+  // }
+  // if (argc > 2) {
+  //   services_1_to_2_parameter_name = argv[2];
+  // }
+  // if (argc > 3) {
+  //   services_2_to_1_parameter_name = argv[3];
+  // }
+
+  int service_execution_timeout{5};
+  ros1_node.getParamCached(
+    service_execution_timeout_parameter_name, service_execution_timeout);
 
   // Topics
   XmlRpc::XmlRpcValue topics;
@@ -331,7 +256,7 @@ int main(int argc, char * argv[])
       try {
         if (topics[i].hasMember("qos")) {
           printf("Setting up QoS for '%s': ", topic_name.c_str());
-          auto qos_settings = qos_from_params(topics[i]["qos"]);
+          auto qos_settings = ros1_bridge::qos_from_params(topics[i]["qos"]);
           printf("\n");
           ros1_bridge::BridgeHandles handles = ros1_bridge::create_bidirectional_bridge(
             ros1_node, ros2_node, "", type_name, topic_name, queue_size, qos_settings);
@@ -355,132 +280,65 @@ int main(int argc, char * argv[])
       "The parameter '%s' either doesn't exist or isn't an array\n", topics_parameter_name);
   }
 
-  // ROS 1 Services in ROS 2
-  XmlRpc::XmlRpcValue services_1_to_2;
-  if (
-    ros1_node.getParam(services_1_to_2_parameter_name, services_1_to_2) &&
-    services_1_to_2.getType() == XmlRpc::XmlRpcValue::TypeArray)
-  {
-    int service_execution_timeout{5};
-    ros1_node.getParamCached(
-      service_execution_timeout_parameter_name, service_execution_timeout);
-    for (size_t i = 0; i < static_cast<size_t>(services_1_to_2.size()); ++i) {
-      std::string service_name = static_cast<std::string>(services_1_to_2[i]["service"]);
-      std::string type_name = static_cast<std::string>(services_1_to_2[i]["type"]);
+  auto ros1_poll = [
+    &ros1_node, ros2_node,
+    &ros1_services, &ros2_services,
+    &service_bridges_1_to_2, &service_bridges_2_to_1,
+    &services_1_to_2_parameter_name, &services_2_to_1_parameter_name,
+    service_execution_timeout, multi_threads
+    ](const ros::TimerEvent &) -> void
+    {
+      std::map<std::string, std::map<std::string, std::string>> active_ros1_services;
+
+      XmlRpc::XmlRpcValue payload;
+      if(!ros1_bridge::get_ros1_master_system_state(payload)) {
+        return;
+      }
+
+      ros1_bridge::get_ros1_services(payload, active_ros1_services);
       {
-        // for backward compatibility
-        std::string package_name = static_cast<std::string>(services_1_to_2[i]["package"]);
-        if (!package_name.empty()) {
-          fprintf(
-            stderr,
-            "The service '%s' uses the key 'package' which is deprecated for "
-            "services. Instead prepend the 'type' value with '<package>/'.\n",
-            service_name.c_str());
-          type_name = package_name + "/" + type_name;
-        }
+        std::lock_guard<std::mutex> lock(g_bridge_mutex);
+        ros1_services = active_ros1_services;
       }
-      printf(
-        "Trying to create bridge for ROS 2 service '%s' with type '%s'\n",
-        service_name.c_str(), type_name.c_str());
 
-      const size_t index = type_name.find("/");
-      if (index == std::string::npos) {
-        fprintf(
-          stderr,
-          "the service '%s' has a type '%s' without a slash.\n",
-          service_name.c_str(), type_name.c_str());
-        continue;
-      }
-      auto factory = ros1_bridge::get_service_factory(
-        "ros2", type_name.substr(0, index), type_name.substr(index + 1));
-      if (factory) {
-        try {
-          service_bridges_1_to_2.push_back(
-            factory->service_bridge_1_to_2(
-              ros1_node, ros2_node, service_name, service_execution_timeout, multi_threads));
-          printf("Created 1 to 2 bridge for service %s\n", service_name.c_str());
-        } catch (std::runtime_error & e) {
-          fprintf(
-            stderr,
-            "failed to create bridge ROS 1 service '%s' with type '%s': %s\n",
-            service_name.c_str(), type_name.c_str(), e.what());
-        }
-      } else {
-        fprintf(
-          stderr,
-          "failed to create bridge ROS 1 service '%s' no conversion for type '%s'\n",
-          service_name.c_str(), type_name.c_str());
-      }
-    }
+      update_services(
+        ros1_node, ros2_node,
+        ros1_services, ros2_services,
+        service_bridges_1_to_2, service_bridges_2_to_1,
+        services_1_to_2_parameter_name, services_2_to_1_parameter_name,
+        service_execution_timeout, multi_threads);
+    };
 
-  } else {
-    fprintf(
-      stderr,
-      "The parameter '%s' either doesn't exist or isn't an array\n",
-      services_1_to_2_parameter_name);
-  }
+  auto ros1_poll_timer = ros1_node.createTimer(ros::Duration(1.0), ros1_poll);
 
-  // ROS 2 Services in ROS 1
-  XmlRpc::XmlRpcValue services_2_to_1;
-  if (
-    ros1_node.getParam(services_2_to_1_parameter_name, services_2_to_1) &&
-    services_2_to_1.getType() == XmlRpc::XmlRpcValue::TypeArray)
-  {
-    for (size_t i = 0; i < static_cast<size_t>(services_2_to_1.size()); ++i) {
-      std::string service_name = static_cast<std::string>(services_2_to_1[i]["service"]);
-      std::string type_name = static_cast<std::string>(services_2_to_1[i]["type"]);
+  std::this_thread::sleep_for(std::chrono::milliseconds(500));
+
+  std::set<std::string> already_ignored_services;
+  auto ros2_poll = [
+    &ros1_node, ros2_node,
+    &ros1_services, &ros2_services,
+    &service_bridges_1_to_2, &service_bridges_2_to_1,
+    &services_1_to_2_parameter_name, &services_2_to_1_parameter_name,
+    &already_ignored_services,
+    service_execution_timeout, multi_threads
+    ]() -> void
+    {
+      std::map<std::string, std::map<std::string, std::string>> active_ros2_services;
+
+      ros1_bridge::get_ros2_services(ros2_node, active_ros2_services, already_ignored_services);
+
       {
-        // for backward compatibility
-        std::string package_name = static_cast<std::string>(services_2_to_1[i]["package"]);
-        if (!package_name.empty()) {
-          fprintf(
-            stderr,
-            "The service '%s' uses the key 'package' which is deprecated for "
-            "services. Instead prepend the 'type' value with '<package>/'.\n",
-            service_name.c_str());
-          type_name = package_name + "/" + type_name;
-        }
-      }
-      printf(
-        "Trying to create bridge for ROS 1 service '%s' with type '%s'\n",
-        service_name.c_str(), type_name.c_str());
-
-      const size_t index = type_name.find("/");
-      if (index == std::string::npos) {
-        fprintf(
-          stderr,
-          "the service '%s' has a type '%s' without a slash.\n",
-          service_name.c_str(), type_name.c_str());
-        continue;
+        std::lock_guard<std::mutex> lock(g_bridge_mutex);
+        ros2_services = active_ros2_services;
       }
 
-      auto factory = ros1_bridge::get_service_factory(
-        "ros1", type_name.substr(0, index), type_name.substr(index + 1));
-      if (factory) {
-        try {
-          service_bridges_2_to_1.push_back(
-            factory->service_bridge_2_to_1(ros1_node, ros2_node, service_name, multi_threads));
-          printf("Created 2 to 1 bridge for service %s\n", service_name.c_str());
-        } catch (std::runtime_error & e) {
-          fprintf(
-            stderr,
-            "failed to create bridge ROS 2 service '%s' with type '%s': %s\n",
-            service_name.c_str(), type_name.c_str(), e.what());
-        }
-      } else {
-        fprintf(
-          stderr,
-          "failed to create bridge ROS 2 service '%s' no conversion for type '%s'\n",
-          service_name.c_str(), type_name.c_str());
-      }
-    }
-
-  } else {
-    fprintf(
-      stderr,
-      "The parameter '%s' either doesn't exist or isn't an array\n",
-      services_2_to_1_parameter_name);
-  }
+      update_services(
+        ros1_node, ros2_node,
+        ros1_services, ros2_services,
+        service_bridges_1_to_2, service_bridges_2_to_1,
+        services_1_to_2_parameter_name, services_2_to_1_parameter_name,
+        service_execution_timeout, multi_threads);
+    };
 
   auto check_ros1_flag = [&ros1_node] {
     if (!ros1_node.ok()) {
@@ -489,7 +347,8 @@ int main(int argc, char * argv[])
   };
 
   auto ros2_poll_timer = ros2_node->create_wall_timer(
-    std::chrono::seconds(1), [&check_ros1_flag] {
+    std::chrono::seconds(1), [&ros2_poll, &check_ros1_flag] {
+      ros2_poll();
       check_ros1_flag();
     }
   );
